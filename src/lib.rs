@@ -14,7 +14,7 @@
 //! RGB asset operations.
 //!
 //! ## Database
-//! A SQLite database is used to persist data to disk.
+//! A SQLite database is used to persist data to disk, including the BDK wallet data.
 //!
 //! Database support is designed in order to support multiple database backends. At the moment only
 //! SQLite is supported but adding more should be relatively easy.
@@ -160,32 +160,35 @@ use bdk_esplora::{
         BlockingClient as EsploraClient, Builder as EsploraBuilder, Error as EsploraError,
     },
 };
-#[cfg(feature = "esplora")]
-use bdk_wallet::bitcoin::Txid;
 use bdk_wallet::{
-    ChangeSet, KeychainKind, LocalOutput, PersistedWallet, SignOptions, Wallet as BdkWallet,
+    ChangeSet, KeychainKind, LocalOutput, SignOptions, Wallet as BdkWallet,
     bitcoin::{
         Address as BdkAddress, Amount as BdkAmount, BlockHash, Network as BdkNetwork, NetworkKind,
-        OutPoint, OutPoint as BdkOutPoint, ScriptBuf, TxOut,
+        OutPoint, OutPoint as BdkOutPoint, ScriptBuf, Transaction as BdkTransaction, TxOut, Txid,
         bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv, Xpub},
+        consensus::{Decodable, Encodable},
         hashes::{Hash as Sha256Hash, sha256},
         psbt::{ExtractTxError, Psbt},
         secp256k1::Secp256k1,
     },
-    chain::{CanonicalizationParams, ChainPosition},
+    chain::{
+        BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorId,
+        keychain_txout, local_chain, tx_graph,
+    },
     descriptor::Segwitv0,
-    file_store::Store,
     keys::{
         DerivableKey, DescriptorKey,
         DescriptorKey::{Public, Secret},
         ExtendedKey, GeneratableKey,
         bip39::{Language, Mnemonic, WordCount},
     },
+    locked_outpoints,
+    miniscript::{Descriptor, DescriptorPublicKey},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use bdk_wallet::{
     Update,
-    bitcoin::{Transaction as BdkTransaction, blockdata::fee_rate::FeeRate, hashes::HashEngine},
+    bitcoin::{blockdata::fee_rate::FeeRate, hashes::HashEngine},
     chain::{
         DescriptorExt,
         spk_client::{FullScanRequest, FullScanResponse, SyncRequest, SyncResponse},
@@ -250,9 +253,10 @@ use schemata::{
 };
 use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
-    ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DatabaseTransaction,
-    DbErr, DeriveActiveEnum, EntityTrait, EnumIter, JsonValue, QueryFilter, QueryOrder,
-    QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
+    ActiveValue, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
+    DatabaseTransaction, DbErr, DeriveActiveEnum, EntityTrait, EnumIter, JsonValue, QueryFilter,
+    QueryOrder, QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
+    sea_query::OnConflict,
 };
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};

@@ -97,9 +97,9 @@ pub trait WalletOnline: WalletOffline {
         // apply the broadcast TX into BDK directly so its outputs are immediately visible
         // (revealed change SPKs match without needing a wallet sync)
         let seen_at = now().unix_timestamp() as u64;
-        let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
-        bdk_wallet.apply_unconfirmed_txs([(tx.clone(), seen_at)]);
-        bdk_wallet.persist(bdk_db)?;
+        self.bdk_wallet_mut()
+            .apply_unconfirmed_txs([(tx.clone(), seen_at)]);
+        self.persist_bdk(txn)?;
 
         // promote any newly-known colored UTXOs (e.g. the change output) from
         // exists=false to exists=true in the rgb_lib DB
@@ -277,7 +277,7 @@ pub trait WalletOnline: WalletOffline {
         let num_try_creating = min(utxos_to_create, max_possible_utxos);
         let mut addresses = vec![];
         for _i in 0..num_try_creating {
-            addresses.push(self.get_new_address()?.script_pubkey());
+            addresses.push(self.get_new_address(txn)?.script_pubkey());
         }
         while !addresses.is_empty() {
             match self.create_split_tx(&inputs, &addresses, utxo_size, fee_rate_checked) {
@@ -2239,11 +2239,12 @@ pub trait WalletOnline: WalletOffline {
 
     fn prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
-        let change_addr = self.get_new_address()?.script_pubkey();
+        let change_addr = self.get_new_address(txn)?.script_pubkey();
         let mut builder = self.bdk_wallet_mut().build_tx();
         builder
             .add_data(&[0; 32])
@@ -2289,13 +2290,14 @@ pub trait WalletOnline: WalletOffline {
 
     fn try_prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_unspents: &[LocalUnspent],
         all_inputs: &mut HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
-            break match self.prepare_psbt(all_inputs.clone(), witness_recipients, fee_rate) {
+            break match self.prepare_psbt(txn, all_inputs.clone(), witness_recipients, fee_rate) {
                 Ok(res) => res,
                 Err(Error::InsufficientBitcoins { .. }) => {
                     let used_txos: Vec<Outpoint> =
@@ -3315,6 +3317,7 @@ pub trait WalletOnline: WalletOffline {
             })
             .collect();
         let (mut psbt, btc_change) = self.try_prepare_psbt(
+            txn,
             input_unspents,
             &mut all_inputs,
             witness_recipients,
@@ -3808,7 +3811,7 @@ pub trait WalletOnline: WalletOffline {
         let mut witness_recipients: Vec<(ScriptBuf, u64)> = vec![];
         for (idx, amt) in inflation_amounts.iter().enumerate() {
             let script_pubkey = self
-                .get_new_addresses(KeychainKind::External, 1)?
+                .get_new_addresses(txn, KeychainKind::External, 1)?
                 .script_pubkey();
             let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
             let beneficiary = XChainNet::with(chainnet, beneficiary);
@@ -3957,7 +3960,7 @@ pub trait WalletOnline: WalletOffline {
 
         let chainnet: ChainNet = self.bitcoin_network().into();
         let script_pubkey = self
-            .get_new_addresses(KeychainKind::External, 1)?
+            .get_new_addresses(txn, KeychainKind::External, 1)?
             .script_pubkey();
         let dust = self
             .bdk_wallet()

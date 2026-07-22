@@ -181,21 +181,22 @@ impl Wallet {
         // reject settings the wallet wasn't created with before any of them reaches the database
         WalletManifest::check_settings_unchanged(&wallet_dir, &wallet_data, &keys)?;
 
-        // setup the BDK wallet
-        let (bdk_wallet, bdk_database) = setup_bdk(
-            &wdata,
-            &wallet_dir,
+        // setup rgb-lib DB
+        let database = setup_db(&wallet_dir)?;
+
+        // setup the BDK wallet, persisting its data inside the rgb-lib DB
+        let txn = database.begin_transaction()?;
+        let bdk_wallet = setup_bdk(
+            &txn,
             descs.colored,
             descs.vanilla,
             watch_only,
-            BdkNetwork::from(wdata.bitcoin_network),
+            wdata.bitcoin_network,
         )?;
+        txn.commit()?;
 
         // setup RGB
         setup_rgb(&wallet_dir, wdata.supported_schemas, wdata.bitcoin_network)?;
-
-        // setup rgb-lib DB
-        let database = setup_db(&wallet_dir)?;
 
         // persist the settings needed to load the wallet back
         WalletManifest::new(&wallet_data, &keys).write(&wallet_dir)?;
@@ -209,7 +210,6 @@ impl Wallet {
                 database: Arc::new(database),
                 wallet_dir,
                 bdk_wallet,
-                bdk_database,
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
             },
@@ -287,8 +287,8 @@ impl Wallet {
     /// Return a new Bitcoin address from the vanilla wallet.
     pub fn get_address(&mut self) -> Result<String, Error> {
         info!(self.logger(), "Getting address...");
-        let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         let txn = self.database().begin_transaction()?;
+        let address = self.get_new_addresses(&txn, KeychainKind::Internal, 1)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         info!(self.logger(), "Get address completed");

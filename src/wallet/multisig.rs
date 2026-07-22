@@ -221,7 +221,7 @@ impl WalletCore for MultisigWallet {
     ) -> Result<(), Error> {
         // sync addresses
         let response = self.hub_client().get_current_address_indices()?;
-        let (bdk_wallet, bdk_database) = self.bdk_wallet_db_mut();
+        let bdk_wallet = self.bdk_wallet_mut();
         let mut persist = false;
         let mut reveal = |keychain_kind: KeychainKind, index: Option<u32>| {
             if let Some(hub_index) = index {
@@ -240,7 +240,7 @@ impl WalletCore for MultisigWallet {
         reveal(KeychainKind::Internal, response.internal);
         reveal(KeychainKind::External, response.external);
         if persist {
-            bdk_wallet.persist(bdk_database)?;
+            self.persist_bdk(txn)?;
         }
         // sync UTXOs
         self.sync_bdk_and_db_txos(txn, options, include_spent)
@@ -253,6 +253,7 @@ impl WalletOffline for MultisigWallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_new_addresses(
         &mut self,
+        txn: &DbTxn,
         keychain: KeychainKind,
         count: u32,
     ) -> Result<BdkAddress, Error> {
@@ -262,12 +263,12 @@ impl WalletOffline for MultisigWallet {
         let target_index = start_index
             .checked_add(count)
             .expect("address derivation index cannot exceed u32::MAX");
-        let (bdk_wallet, bdk_database) = self.bdk_wallet_db_mut();
+        let bdk_wallet = self.bdk_wallet_mut();
         for _ in local_index..target_index {
             bdk_wallet.reveal_next_address(keychain);
         }
         let first_address = bdk_wallet.peek_address(keychain, start_index).address;
-        bdk_wallet.persist(bdk_database)?;
+        self.persist_bdk(txn)?;
         Ok(first_address)
     }
 }
@@ -1020,21 +1021,22 @@ impl MultisigWallet {
         let (wallet_dir, logger, _logger_guard) = setup_new_wallet(&wallet_data, &fingerprint)?;
         fs::create_dir_all(wallet_dir.join(HUB_OPS_DIR))?;
 
-        // setup the BDK wallet
-        let (bdk_wallet, bdk_database) = setup_bdk(
-            &wdata,
-            &wallet_dir,
+        // setup rgb-lib DB
+        let database = setup_db(&wallet_dir)?;
+
+        // setup the BDK wallet, persisting its data inside the rgb-lib DB
+        let txn = database.begin_transaction()?;
+        let bdk_wallet = setup_bdk(
+            &txn,
             descs.colored,
             descs.vanilla,
             true,
-            BdkNetwork::from(wdata.bitcoin_network),
+            wdata.bitcoin_network,
         )?;
+        txn.commit()?;
 
         // setup RGB
         setup_rgb(&wallet_dir, wdata.supported_schemas, wdata.bitcoin_network)?;
-
-        // setup rgb-lib DB
-        let database = setup_db(&wallet_dir)?;
 
         info!(logger, "New multisig wallet completed");
         Ok(Self {
@@ -1045,7 +1047,6 @@ impl MultisigWallet {
                 database: Arc::new(database),
                 wallet_dir,
                 bdk_wallet,
-                bdk_database,
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
             },
@@ -1184,8 +1185,8 @@ impl MultisigWallet {
         info!(self.logger(), "Getting address...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
-        let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         let txn = self.database().begin_transaction()?;
+        let address = self.get_new_addresses(&txn, KeychainKind::Internal, 1)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         info!(self.logger(), "Get address completed");

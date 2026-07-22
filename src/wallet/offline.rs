@@ -961,7 +961,7 @@ pub trait WalletOffline: WalletBackup {
                 (beneficiary, recipient_type_full, Some(blind_seal), None)
             }
             RecipientType::Witness => {
-                let script_pubkey = self.get_new_address()?.script_pubkey();
+                let script_pubkey = self.get_new_address(txn)?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
                 let recipient_type_full = RecipientTypeFull::Witness { vout: None };
                 (beneficiary, recipient_type_full, None, Some(script_pubkey))
@@ -1229,17 +1229,17 @@ pub trait WalletOffline: WalletBackup {
 
     fn get_new_addresses(
         &mut self,
+        txn: &DbTxn,
         keychain: KeychainKind,
         _count: u32,
     ) -> Result<BdkAddress, Error> {
-        let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
-        let address = bdk_wallet.reveal_next_address(keychain).address;
-        bdk_wallet.persist(bdk_db)?;
+        let address = self.bdk_wallet_mut().reveal_next_address(keychain).address;
+        self.persist_bdk(txn)?;
         Ok(address)
     }
 
-    fn get_new_address(&mut self) -> Result<BdkAddress, Error> {
-        self.get_new_addresses(KeychainKind::External, 1)
+    fn get_new_address(&mut self, txn: &DbTxn) -> Result<BdkAddress, Error> {
+        self.get_new_addresses(txn, KeychainKind::External, 1)
     }
 
     fn get_asset_balance_impl(&self, txn: &DbTxn, asset_id: String) -> Result<Balance, Error> {

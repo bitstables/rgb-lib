@@ -695,6 +695,9 @@ pub(crate) enum InternalError {
     #[error("Error from bdk adding UTXOs: {0}")]
     BdkAddUtxoError(#[from] bdk_wallet::tx_builder::AddUtxoError),
 
+    #[error("Error from bdk descriptor: {0}")]
+    BdkDescriptorError(#[from] bdk_wallet::descriptor::DescriptorError),
+
     #[error("Error from bdk extracting TX: {0}")]
     BdkExtractTxError(String),
 
@@ -888,36 +891,12 @@ impl From<rgbinvoice::TransportParseError> for Error {
     }
 }
 
-impl From<bdk_wallet::file_store::StoreErrorWithDump<ChangeSet>> for Error {
-    fn from(e: bdk_wallet::file_store::StoreErrorWithDump<ChangeSet>) -> Self {
-        Error::IO {
-            details: e.to_string(),
-        }
-    }
-}
-
-impl From<bdk_wallet::FileStoreError> for Error {
-    fn from(e: bdk_wallet::FileStoreError) -> Self {
-        Error::IO {
-            details: e.to_string(),
-        }
-    }
-}
-
-impl From<bdk_wallet::CreateWithPersistError<bdk_wallet::FileStoreError>> for Error {
-    fn from(e: bdk_wallet::CreateWithPersistError<bdk_wallet::FileStoreError>) -> Self {
-        Error::IO {
-            details: e.to_string(),
-        }
-    }
-}
-
-impl From<bdk_wallet::LoadWithPersistError<bdk_wallet::FileStoreError>> for Error {
-    fn from(e: bdk_wallet::LoadWithPersistError<bdk_wallet::FileStoreError>) -> Self {
+impl From<bdk_wallet::LoadError> for Error {
+    fn from(e: bdk_wallet::LoadError) -> Self {
         match e {
-            bdk_wallet::LoadWithPersistError::InvalidChangeSet(
-                bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Genesis { .. }),
-            ) => Error::BitcoinNetworkMismatch,
+            bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Genesis { .. }) => {
+                Error::BitcoinNetworkMismatch
+            }
             _ => Error::IO {
                 details: e.to_string(),
             },
@@ -990,33 +969,21 @@ mod tests {
         let err = Error::from(err);
         assert_matches!(err, Error::Internal { details } if !details.is_empty());
 
-        // LoadWithPersistError error
-        let err = bdk_wallet::LoadWithPersistError::Persist(bdk_wallet::FileStoreError::Write(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"),
-        ));
-        let err = Error::from(err);
-        assert_matches!(err, Error::IO { details } if !details.is_empty());
+        // DescriptorError error
+        let err = bdk_wallet::descriptor::DescriptorError::InvalidDescriptorCharacter(0);
+        let err = Error::from(InternalError::from(err));
+        assert_matches!(err, Error::Internal { details } if !details.is_empty());
 
-        // CreateWithPersistError error
-        let err = bdk_wallet::CreateWithPersistError::Persist(bdk_wallet::FileStoreError::Write(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"),
-        ));
+        // LoadError genesis mismatch maps to a bitcoin network mismatch
+        let err = bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Genesis {
+            loaded: BlockHash::from_byte_array([0; 32]),
+            expected: BlockHash::from_byte_array([1; 32]),
+        });
         let err = Error::from(err);
-        assert_matches!(err, Error::IO { details } if !details.is_empty());
+        assert_matches!(err, Error::BitcoinNetworkMismatch);
 
-        // FileStoreError error
-        let err = bdk_wallet::FileStoreError::Write(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "no access",
-        ));
-        let err = Error::from(err);
-        assert_matches!(err, Error::IO { details } if !details.is_empty());
-
-        // StoreErrorWithDump error
-        let err = bdk_wallet::file_store::StoreErrorWithDump::<ChangeSet>::from(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"),
-        );
-        let err = Error::from(err);
+        // other LoadError variants map to an IO error
+        let err = Error::from(bdk_wallet::LoadError::MissingNetwork);
         assert_matches!(err, Error::IO { details } if !details.is_empty());
 
         // IndexerError error

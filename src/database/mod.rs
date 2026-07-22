@@ -1,3 +1,4 @@
+mod bdk;
 pub(crate) mod entities;
 
 use super::*;
