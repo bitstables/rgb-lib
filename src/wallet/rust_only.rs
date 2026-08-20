@@ -539,7 +539,7 @@ impl Wallet {
         info!(self.logger(), "Listing unspents vanilla...");
         let txn = self.database().begin_transaction()?;
         self.sync_if_requested(&txn, Some(online), skip_sync, KeychainKind::Internal)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
 
         let unspents = self.internal_unspents();
 
@@ -648,7 +648,7 @@ impl Wallet {
         )?;
 
         self.update_backup_info(&txn, false)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
 
         info!(self.logger(), "Send (end) db update only completed");
         Ok(OperationResult {

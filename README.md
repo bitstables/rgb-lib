@@ -22,10 +22,18 @@ N.B.: this library is still a work in progress and in its testing phase. Also,
 as long as the version is 0.*, API breaking changes should be expected.
 
 ## Important remark
-> :warning: **Warning: never use the same wallet on more than one device!**
+> :warning: **Warning: never instantiate a wallet in multiple places!**
 >
-> Using the same wallet (mnemonic phrase) on multiple devices can lead to RGB
-> asset loss due to improper UTXO management.
+> Using the same wallet (mnemonic phrase) on multiple directories or devices
+> can lead to RGB asset loss due to improper UTXO management.
+>
+> This includes keeping two instances live on a single data directory: an
+> instance loads its BDK state from the database when it is created and does not
+> re-read it afterwards, so the two immediately drift apart. They will hand out
+> the same addresses, causing address reuse, and each will persist state the
+> other is unaware of. A watch-only wallet and its signing counterpart are no
+> exception: keep a single instance performing wallet operations and use the
+> other one only to sign.
 
 This library is intended to exclusively handle all UTXOs for the wallet. Using
 the same mnemonic phrase on any other device, including with this same library,

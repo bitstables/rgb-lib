@@ -710,8 +710,11 @@ pub(crate) enum InternalError {
     #[error("Confinement error: {0}")]
     Confinement(#[from] amplify::confinement::Error),
 
-    #[error("Encode error: {0}")]
-    Encode(#[from] bitcoin::consensus::encode::Error),
+    #[error("Consensus decode error: {0}")]
+    ConsensusDecode(#[from] bitcoin::consensus::encode::Error),
+
+    #[error("Consensus encode error: {0}")]
+    ConsensusEncode(#[from] bitcoin::io::Error),
 
     #[error("From slice error: {0}")]
     FromSlice(#[from] amplify::FromSliceError),
@@ -719,8 +722,20 @@ pub(crate) enum InternalError {
     #[error("Hash error: {0}")]
     HashError(#[from] scrypt::password_hash::phc::Error),
 
+    #[error("Hex decode error: {0}")]
+    HexDecode(#[from] bitcoin::hashes::hex::HexToArrayError),
+
     #[error("Infallible error: {0}")]
     Infallible(#[from] std::convert::Infallible),
+
+    #[error("Miniscript error: {0}")]
+    Miniscript(#[from] bdk_wallet::miniscript::Error),
+
+    #[error("Parse int error: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    #[error("Parse network error: {0}")]
+    ParseNetwork(#[from] bitcoin::network::ParseNetworkError),
 
     #[error("PSBT parse error: {0}")]
     PsbtParse(#[from] bdk_wallet::bitcoin::psbt::PsbtParseError),
@@ -897,7 +912,9 @@ impl From<bdk_wallet::LoadError> for Error {
             bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Genesis { .. }) => {
                 Error::BitcoinNetworkMismatch
             }
-            _ => Error::IO {
+            // the remaining variants all mean the persisted data does not match what the wallet
+            // was asked to load
+            _ => Error::Internal {
                 details: e.to_string(),
             },
         }
@@ -982,9 +999,9 @@ mod tests {
         let err = Error::from(err);
         assert_matches!(err, Error::BitcoinNetworkMismatch);
 
-        // other LoadError variants map to an IO error
+        // other LoadError variants map to an internal error
         let err = Error::from(bdk_wallet::LoadError::MissingNetwork);
-        assert_matches!(err, Error::IO { details } if !details.is_empty());
+        assert_matches!(err, Error::Internal { details } if !details.is_empty());
 
         // IndexerError error
         #[cfg(feature = "electrum")]
@@ -1020,6 +1037,36 @@ mod tests {
             internal,
             InternalError::StripPrefix(ref e) if e.to_string() == msg
         );
+
+        // ConsensusDecode error
+        let err = BdkTransaction::consensus_decode_from_finite_reader(&mut &[][..]).unwrap_err();
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::ConsensusDecode(ref e) if !e.to_string().is_empty());
+
+        // ConsensusEncode error
+        let err = bitcoin::io::Error::from(bitcoin::io::ErrorKind::UnexpectedEof);
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::ConsensusEncode(ref e) if !e.to_string().is_empty());
+
+        // HexDecode error
+        let err = Txid::from_str("not hex").unwrap_err();
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::HexDecode(ref e) if !e.to_string().is_empty());
+
+        // Miniscript error
+        let err = Descriptor::<DescriptorPublicKey>::from_str("not a descriptor").unwrap_err();
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::Miniscript(ref e) if !e.to_string().is_empty());
+
+        // ParseInt error
+        let err = "not a number".parse::<u64>().unwrap_err();
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::ParseInt(ref e) if !e.to_string().is_empty());
+
+        // ParseNetwork error
+        let err = BdkNetwork::from_str("not a network").unwrap_err();
+        let err = InternalError::from(err);
+        assert_matches!(err, InternalError::ParseNetwork(ref e) if !e.to_string().is_empty());
 
         // ExtractTxError error
         let psbt = Psbt::from_str(FAKE_PSBT).unwrap();

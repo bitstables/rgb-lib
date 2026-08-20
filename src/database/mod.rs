@@ -224,12 +224,16 @@ impl RgbLibDatabase {
     pub(crate) fn begin_transaction(&self) -> Result<DbTxn, Error> {
         Ok(DbTxn {
             txn: Some(block_on(self.connection.begin())?),
+            on_commit: Mutex::new(Vec::new()),
         })
     }
 }
 
 pub struct DbTxn {
     txn: Option<DatabaseTransaction>,
+    /// Callbacks run only if the transaction commits, to discard the crash-recovery copies of
+    /// data the commit has just made durable.
+    on_commit: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Drop for DbTxn {
@@ -247,9 +251,29 @@ impl DbTxn {
         self.txn.as_ref().expect("txn already consumed")
     }
 
+    /// Register a callback to run once this transaction has been durably committed.
+    ///
+    /// If the transaction is rolled back instead, the callback is dropped without running.
+    pub(crate) fn on_commit(&self, f: impl FnOnce() + Send + 'static) {
+        self.on_commit
+            .lock()
+            .expect("on_commit mutex is never poisoned")
+            .push(Box::new(f));
+    }
+
     pub(crate) fn commit(mut self) -> Result<(), Error> {
         let txn = self.txn.take().expect("txn already consumed");
-        Ok(block_on(txn.commit())?)
+        block_on(txn.commit())?;
+        let callbacks = std::mem::take(
+            &mut *self
+                .on_commit
+                .lock()
+                .expect("on_commit mutex is never poisoned"),
+        );
+        for callback in callbacks {
+            callback();
+        }
+        Ok(())
     }
 
     pub(crate) fn set_asset(&self, asset: DbAssetActMod) -> Result<i32, Error> {

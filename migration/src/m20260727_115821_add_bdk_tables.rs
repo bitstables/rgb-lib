@@ -30,14 +30,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkWalletLockedOutpoint::Table)
                     .if_not_exists()
+                    .col(pk_auto(BdkWalletLockedOutpoint::Idx))
                     .col(string(BdkWalletLockedOutpoint::Txid))
                     .col(big_integer(BdkWalletLockedOutpoint::Vout))
-                    .primary_key(
-                        Index::create()
-                            .col(BdkWalletLockedOutpoint::Txid)
-                            .col(BdkWalletLockedOutpoint::Vout),
-                    )
                     .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdkwalletlockedoutpoint-txid-vout")
+                    .table(BdkWalletLockedOutpoint::Table)
+                    .col(BdkWalletLockedOutpoint::Txid)
+                    .col(BdkWalletLockedOutpoint::Vout)
+                    .unique()
+                    .clone(),
             )
             .await?;
 
@@ -47,9 +54,20 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkBlock::Table)
                     .if_not_exists()
-                    .col(big_integer(BdkBlock::BlockHeight).primary_key())
+                    .col(pk_auto(BdkBlock::Idx))
+                    .col(big_integer(BdkBlock::BlockHeight))
                     .col(string(BdkBlock::BlockHash))
                     .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdkblock-blockheight")
+                    .table(BdkBlock::Table)
+                    .col(BdkBlock::BlockHeight)
+                    .unique()
+                    .clone(),
             )
             .await?;
 
@@ -59,12 +77,23 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkTx::Table)
                     .if_not_exists()
-                    .col(string(BdkTx::Txid).primary_key())
+                    .col(pk_auto(BdkTx::Idx))
+                    .col(string(BdkTx::Txid))
                     .col(binary_null(BdkTx::RawTx))
-                    .col(big_integer_null(BdkTx::FirstSeen))
-                    .col(big_integer_null(BdkTx::LastSeen))
-                    .col(big_integer_null(BdkTx::LastEvicted))
+                    .col(string_null(BdkTx::FirstSeen))
+                    .col(string_null(BdkTx::LastSeen))
+                    .col(string_null(BdkTx::LastEvicted))
                     .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdktx-txid")
+                    .table(BdkTx::Table)
+                    .col(BdkTx::Txid)
+                    .unique()
+                    .clone(),
             )
             .await?;
 
@@ -74,12 +103,23 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkTxout::Table)
                     .if_not_exists()
+                    .col(pk_auto(BdkTxout::Idx))
                     .col(string(BdkTxout::Txid))
                     .col(big_integer(BdkTxout::Vout))
-                    .col(big_integer(BdkTxout::Value))
+                    .col(string(BdkTxout::Value))
                     .col(binary(BdkTxout::Script))
-                    .primary_key(Index::create().col(BdkTxout::Txid).col(BdkTxout::Vout))
                     .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdktxout-txid-vout")
+                    .table(BdkTxout::Table)
+                    .col(BdkTxout::Txid)
+                    .col(BdkTxout::Vout)
+                    .unique()
+                    .clone(),
             )
             .await?;
 
@@ -89,16 +129,11 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkAnchor::Table)
                     .if_not_exists()
+                    .col(pk_auto(BdkAnchor::Idx))
                     .col(string(BdkAnchor::Txid))
                     .col(big_integer(BdkAnchor::BlockHeight))
                     .col(string(BdkAnchor::BlockHash))
-                    .col(big_integer(BdkAnchor::ConfirmationTime))
-                    .primary_key(
-                        Index::create()
-                            .col(BdkAnchor::Txid)
-                            .col(BdkAnchor::BlockHeight)
-                            .col(BdkAnchor::BlockHash),
-                    )
+                    .col(string(BdkAnchor::ConfirmationTime))
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk-bdkanchor-bdktx")
@@ -110,6 +145,18 @@ impl MigrationTrait for Migration {
                     .to_owned(),
             )
             .await?;
+        manager
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdkanchor-txid-blockheight-blockhash")
+                    .table(BdkAnchor::Table)
+                    .col(BdkAnchor::Txid)
+                    .col(BdkAnchor::BlockHeight)
+                    .col(BdkAnchor::BlockHash)
+                    .unique()
+                    .clone(),
+            )
+            .await?;
 
         // last revealed index per descriptor
         manager
@@ -117,41 +164,30 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BdkDescriptorLastRevealed::Table)
                     .if_not_exists()
-                    .col(string(BdkDescriptorLastRevealed::DescriptorId).primary_key())
+                    .col(pk_auto(BdkDescriptorLastRevealed::Idx))
+                    .col(string(BdkDescriptorLastRevealed::DescriptorId))
                     .col(big_integer(BdkDescriptorLastRevealed::LastRevealed))
                     .to_owned(),
             )
             .await?;
-
-        // derived SPK cache
         manager
-            .create_table(
-                Table::create()
-                    .table(BdkDescriptorDerivedSpk::Table)
-                    .if_not_exists()
-                    .col(string(BdkDescriptorDerivedSpk::DescriptorId))
-                    .col(big_integer(BdkDescriptorDerivedSpk::SpkIndex))
-                    .col(binary(BdkDescriptorDerivedSpk::Spk))
-                    .primary_key(
-                        Index::create()
-                            .col(BdkDescriptorDerivedSpk::DescriptorId)
-                            .col(BdkDescriptorDerivedSpk::SpkIndex),
-                    )
-                    .to_owned(),
+            .create_index(
+                sea_query::Index::create()
+                    .name("idx-bdkdescriptorlastrevealed-descriptorid")
+                    .table(BdkDescriptorLastRevealed::Table)
+                    .col(BdkDescriptorLastRevealed::DescriptorId)
+                    .unique()
+                    .clone(),
             )
             .await?;
+
+        // bdk_chain also has a table for the derived SPK cache, which is left out: it is only
+        // written when the wallet is built with `use_spk_cache`, which rgb-lib never enables
 
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(
-                Table::drop()
-                    .table(BdkDescriptorDerivedSpk::Table)
-                    .to_owned(),
-            )
-            .await?;
         manager
             .drop_table(
                 Table::drop()
@@ -198,6 +234,7 @@ enum BdkWallet {
 #[derive(DeriveIden)]
 enum BdkWalletLockedOutpoint {
     Table,
+    Idx,
     Txid,
     Vout,
 }
@@ -205,6 +242,7 @@ enum BdkWalletLockedOutpoint {
 #[derive(DeriveIden)]
 enum BdkBlock {
     Table,
+    Idx,
     BlockHeight,
     BlockHash,
 }
@@ -212,6 +250,7 @@ enum BdkBlock {
 #[derive(DeriveIden)]
 enum BdkTx {
     Table,
+    Idx,
     Txid,
     RawTx,
     FirstSeen,
@@ -222,6 +261,7 @@ enum BdkTx {
 #[derive(DeriveIden)]
 enum BdkTxout {
     Table,
+    Idx,
     Txid,
     Vout,
     Value,
@@ -231,6 +271,7 @@ enum BdkTxout {
 #[derive(DeriveIden)]
 enum BdkAnchor {
     Table,
+    Idx,
     Txid,
     BlockHeight,
     BlockHash,
@@ -240,14 +281,7 @@ enum BdkAnchor {
 #[derive(DeriveIden)]
 enum BdkDescriptorLastRevealed {
     Table,
+    Idx,
     DescriptorId,
     LastRevealed,
-}
-
-#[derive(DeriveIden)]
-enum BdkDescriptorDerivedSpk {
-    Table,
-    DescriptorId,
-    SpkIndex,
-    Spk,
 }

@@ -961,7 +961,7 @@ pub trait WalletOffline: WalletBackup {
                 (beneficiary, recipient_type_full, Some(blind_seal), None)
             }
             RecipientType::Witness => {
-                let script_pubkey = self.get_new_address(txn)?.script_pubkey();
+                let script_pubkey = self.get_new_address()?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
                 let recipient_type_full = RecipientTypeFull::Witness { vout: None };
                 (beneficiary, recipient_type_full, None, Some(script_pubkey))
@@ -1229,17 +1229,14 @@ pub trait WalletOffline: WalletBackup {
 
     fn get_new_addresses(
         &mut self,
-        txn: &DbTxn,
         keychain: KeychainKind,
         _count: u32,
     ) -> Result<BdkAddress, Error> {
-        let address = self.bdk_wallet_mut().reveal_next_address(keychain).address;
-        self.persist_bdk(txn)?;
-        Ok(address)
+        Ok(self.bdk_wallet_mut().reveal_next_address(keychain).address)
     }
 
-    fn get_new_address(&mut self, txn: &DbTxn) -> Result<BdkAddress, Error> {
-        self.get_new_addresses(txn, KeychainKind::External, 1)
+    fn get_new_address(&mut self) -> Result<BdkAddress, Error> {
+        self.get_new_addresses(KeychainKind::External, 1)
     }
 
     fn get_asset_balance_impl(&self, txn: &DbTxn, asset_id: String) -> Result<Balance, Error> {
@@ -2700,7 +2697,7 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         info!(self.logger(), "Getting BTC balance...");
         let txn = self.database().begin_transaction()?;
         let balance = self.get_btc_balance_impl(&txn, online, skip_sync)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Get BTC balance completed");
         Ok(balance)
     }
@@ -2730,7 +2727,7 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         info!(self.logger(), "Listing transactions...");
         let txn = self.database().begin_transaction()?;
         let transactions = self.list_transactions_impl(&txn, online, skip_sync)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "List transactions completed");
         Ok(transactions)
     }
@@ -2772,7 +2769,7 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         info!(self.logger(), "Listing unspents...");
         let txn = self.database().begin_transaction()?;
         let unspents = self.list_unspents_impl(&txn, online, settled_only, skip_sync)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "List unspents completed");
         Ok(unspents)
     }

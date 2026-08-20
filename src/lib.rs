@@ -137,7 +137,7 @@ use std::{
     panic,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
 
@@ -160,6 +160,8 @@ use bdk_esplora::{
         BlockingClient as EsploraClient, Builder as EsploraBuilder, Error as EsploraError,
     },
 };
+#[cfg(feature = "bdk_file_store_migration")]
+use bdk_wallet::file_store::Store;
 use bdk_wallet::{
     ChangeSet, KeychainKind, LocalOutput, SignOptions, Wallet as BdkWallet,
     bitcoin::{
@@ -172,8 +174,7 @@ use bdk_wallet::{
         secp256k1::Secp256k1,
     },
     chain::{
-        BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorId,
-        keychain_txout, local_chain, tx_graph,
+        BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorId, Merge,
     },
     descriptor::Segwitv0,
     keys::{
@@ -182,7 +183,6 @@ use bdk_wallet::{
         ExtendedKey, GeneratableKey,
         bip39::{Language, Mnemonic, WordCount},
     },
-    locked_outpoints,
     miniscript::{Descriptor, DescriptorPublicKey},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -253,10 +253,10 @@ use schemata::{
 };
 use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
-    ActiveValue, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
-    DatabaseTransaction, DbErr, DeriveActiveEnum, EntityTrait, EnumIter, JsonValue, QueryFilter,
-    QueryOrder, QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
-    sea_query::OnConflict,
+    ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DatabaseTransaction,
+    DbErr, DeriveActiveEnum, EntityTrait, EnumIter, JsonValue, QueryFilter, QueryOrder,
+    QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
+    sea_query::{Alias, Expr, ExprTrait, Func, OnConflict, SimpleExpr},
 };
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -344,7 +344,7 @@ use crate::{
         adjust_canonicalization, beneficiary_from_script_buf, from_str_or_number_mandatory,
         from_str_or_number_optional, get_account_xpubs, get_coin_type, get_descriptors,
         get_descriptors_from_xpubs, hash_bytes, hash_bytes_hex, load_rgb_runtime, now,
-        parse_address_str, setup_logger, str_to_xpub,
+        parse_address_str, setup_logger, str_to_xpub, sync_dir,
     },
     wallet::{
         Balance, LocalRgbAllocation, LocalUnspent, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_CFA,

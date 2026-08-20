@@ -8,7 +8,6 @@ pub mod backup_info;
 pub mod batch_transfer;
 pub mod bdk_anchor;
 pub mod bdk_block;
-pub mod bdk_descriptor_derived_spk;
 pub mod bdk_descriptor_last_revealed;
 pub mod bdk_tx;
 pub mod bdk_txout;

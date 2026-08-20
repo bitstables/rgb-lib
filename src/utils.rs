@@ -166,6 +166,22 @@ impl From<BitcoinNetwork> for ChainNet {
     }
 }
 
+/// Make a newly created file's directory entry durable.
+///
+/// [`File::sync_all`](fs::File::sync_all) covers a file's own data and metadata but not the entry
+/// that names it, so without this a freshly created file can still vanish on power loss.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn sync_dir<P: AsRef<Path>>(dir: P) -> Result<(), io::Error> {
+    fs::File::open(dir)?.sync_all()
+}
+
+/// Windows cannot open a directory as a file and offers no portable equivalent, so the directory
+/// entry is left to the filesystem's own ordering there.
+#[cfg(target_os = "windows")]
+pub(crate) fn sync_dir<P: AsRef<Path>>(_dir: P) -> Result<(), io::Error> {
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn adjust_canonicalization<P: AsRef<Path>>(p: P) -> String {
     p.as_ref().display().to_string()

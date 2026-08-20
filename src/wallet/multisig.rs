@@ -222,7 +222,6 @@ impl WalletCore for MultisigWallet {
         // sync addresses
         let response = self.hub_client().get_current_address_indices()?;
         let bdk_wallet = self.bdk_wallet_mut();
-        let mut persist = false;
         let mut reveal = |keychain_kind: KeychainKind, index: Option<u32>| {
             if let Some(hub_index) = index {
                 let local_index = bdk_wallet
@@ -233,15 +232,11 @@ impl WalletCore for MultisigWallet {
                     for _ in local_index..hub_index as i64 {
                         bdk_wallet.reveal_next_address(keychain_kind);
                     }
-                    persist = true;
                 }
             }
         };
         reveal(KeychainKind::Internal, response.internal);
         reveal(KeychainKind::External, response.external);
-        if persist {
-            self.persist_bdk(txn)?;
-        }
         // sync UTXOs
         self.sync_bdk_and_db_txos(txn, options, include_spent)
     }
@@ -253,7 +248,6 @@ impl WalletOffline for MultisigWallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_new_addresses(
         &mut self,
-        txn: &DbTxn,
         keychain: KeychainKind,
         count: u32,
     ) -> Result<BdkAddress, Error> {
@@ -268,7 +262,6 @@ impl WalletOffline for MultisigWallet {
             bdk_wallet.reveal_next_address(keychain);
         }
         let first_address = bdk_wallet.peek_address(keychain, start_index).address;
-        self.persist_bdk(txn)?;
         Ok(first_address)
     }
 }
@@ -343,7 +336,7 @@ impl RgbWalletOpsOnline for MultisigWallet {
         if outcome.transfers_changed {
             self.update_backup_info(&txn, false)?;
         }
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Fail transfers completed");
         if outcome.cannot_fail {
             return Err(Error::CannotFailBatchTransfer);
@@ -1028,6 +1021,7 @@ impl MultisigWallet {
         let txn = database.begin_transaction()?;
         let bdk_wallet = setup_bdk(
             &txn,
+            &wallet_dir,
             descs.colored,
             descs.vanilla,
             true,
@@ -1047,6 +1041,7 @@ impl MultisigWallet {
                 database: Arc::new(database),
                 wallet_dir,
                 bdk_wallet,
+                bdk_pending: Arc::new(Mutex::new(ChangeSet::default())),
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
             },
@@ -1185,10 +1180,10 @@ impl MultisigWallet {
         info!(self.logger(), "Getting address...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
+        let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         let txn = self.database().begin_transaction()?;
-        let address = self.get_new_addresses(&txn, KeychainKind::Internal, 1)?;
         self.update_backup_info(&txn, false)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Get address completed");
         Ok(address.to_string())
     }
@@ -1500,7 +1495,7 @@ impl MultisigWallet {
 
         self.mark_operation_as_processed(&txn, response.operation_idx)?;
 
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
 
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
@@ -1835,7 +1830,7 @@ impl MultisigWallet {
         self.refresh_impl(&txn, None, vec![], true)?;
 
         let op_idx = self.get_local_last_processed_operation_idx_impl(&txn)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         let next_op_idx = op_idx
             .checked_add(1)
             .expect("operation index cannot exceed i32::MAX");
@@ -1858,14 +1853,14 @@ impl MultisigWallet {
         if needs_refresh {
             let txn = self.database().begin_transaction()?;
             let _ = self.refresh_impl(&txn, None, vec![], true)?;
-            txn.commit()?;
+            self.persist_and_commit(txn)?;
             if !matches!(
                 op.operation_type,
                 OperationType::Inflation | OperationType::Burn
             ) {
                 let txn = self.database().begin_transaction()?;
                 let _ = self.refresh_impl(&txn, None, vec![], true);
-                txn.commit()?;
+                self.persist_and_commit(txn)?;
             }
         }
 
@@ -1881,7 +1876,7 @@ impl MultisigWallet {
 
         let txn = self.database().begin_transaction()?;
         self.update_backup_info(&txn, false)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Sync with hub completed");
         Ok(Some(OperationInfo {
             operation_idx: op.operation_idx,
@@ -1972,14 +1967,14 @@ impl MultisigWallet {
                 let txid = H::finalize_and_execute(&txn, self, &combined_psbt)?;
                 self.update_backup_info(&txn, false)?;
                 self.mark_operation_as_processed(&txn, op.operation_idx)?;
-                txn.commit()?;
+                self.persist_and_commit(txn)?;
                 let status = Self::build_voting_status(op, op.my_response)?;
                 Ok(H::completed(txid, details, status))
             }
             (OperationStatus::Discarded, my_response) => {
                 let txn = self.database().begin_transaction()?;
                 self.mark_operation_as_processed(&txn, op.operation_idx)?;
-                txn.commit()?;
+                self.persist_and_commit(txn)?;
                 let status = Self::build_voting_status(op, my_response)?;
                 Ok(H::discarded(details, status))
             }
@@ -2001,7 +1996,7 @@ impl MultisigWallet {
                     let txn = self.database().begin_transaction()?;
                     let asset_id = self.accept_issuance_consignment(&files, &txn)?;
                     self.mark_operation_as_processed(&txn, op.operation_idx)?;
-                    txn.commit()?;
+                    self.persist_and_commit(txn)?;
                     Operation::IssuanceCompleted { asset_id }
                 }
                 _ => {
@@ -2015,7 +2010,7 @@ impl MultisigWallet {
                     let txn = self.database().begin_transaction()?;
                     let details = self.import_receive_data(&txn, &files, &op.operation_type)?;
                     self.mark_operation_as_processed(&txn, op.operation_idx)?;
-                    txn.commit()?;
+                    self.persist_and_commit(txn)?;
                     match op.operation_type {
                         OperationType::BlindReceive => Operation::BlindReceiveCompleted { details },
                         _ => Operation::WitnessReceiveCompleted { details },
@@ -2099,7 +2094,7 @@ impl MultisigWallet {
 
         let txn = self.database().begin_transaction()?;
         self.update_backup_info(&txn, false)?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Responding to operation...");
         Ok(OperationInfo {
             operation_idx: operation_response.operation_idx,
@@ -2174,7 +2169,7 @@ impl MultisigWallet {
         let psbt =
             self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, true)?;
         let res = self.post_operation(OperationType::CreateUtxos, PostData::Psbt(psbt))?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Initiate creating UTXOs completed");
         Ok(res)
     }
@@ -2198,7 +2193,7 @@ impl MultisigWallet {
         let txn = self.database().begin_transaction()?;
         let psbt = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true)?;
         let res = self.post_operation(OperationType::SendBtc, PostData::Psbt(psbt))?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Initiate sending BTC completed");
         Ok(res)
     }
@@ -2256,7 +2251,7 @@ impl MultisigWallet {
             OperationType::SendRgb,
             PostData::BeginOperationData(Box::new(data)),
         )?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Initiate sending completed");
         Ok(res)
     }
@@ -2297,7 +2292,7 @@ impl MultisigWallet {
             OperationType::Inflation,
             PostData::BeginOperationData(Box::new(data)),
         )?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Initiate inflating completed");
         Ok(res)
     }
@@ -2328,7 +2323,7 @@ impl MultisigWallet {
             OperationType::Burn,
             PostData::BeginOperationData(Box::new(data)),
         )?;
-        txn.commit()?;
+        self.persist_and_commit(txn)?;
         info!(self.logger(), "Initiate burning completed");
         Ok(res)
     }

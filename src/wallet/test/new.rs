@@ -623,3 +623,61 @@ fn supported_schemas() {
         assert_matches!(e, Error::CannotUseIfaOnMainnet);
     }
 }
+
+// Wallets created before the BDK changeset moved into the rgb-lib DB keep their data in a
+// bdk_file_store file. Their revealed-address indices cannot be rebuilt by a rescan, which only
+// restores up to the last *used* index, so wallet setup has to import them.
+#[cfg(feature = "bdk_file_store_migration")]
+#[test]
+#[parallel]
+fn legacy_bdk_store_is_imported() {
+    // a wallet with addresses that have been revealed but never used
+    let mut donor = get_test_wallet(true, None);
+    for _ in 0..5 {
+        donor.get_address().unwrap();
+    }
+    let descriptors = donor.get_descriptors();
+    let txn = donor.database().begin_transaction().unwrap();
+    let legacy_changeset = txn.get_bdk_changeset().unwrap();
+    txn.commit().unwrap();
+    let expected = legacy_changeset.indexer.last_revealed.clone();
+    assert!(!expected.is_empty());
+
+    // a wallet directory holding only the legacy file store, as an upgraded wallet would have
+    let dir = TempDir::new().unwrap();
+    let mut store =
+        Store::<ChangeSet>::create(BDK_DB_NAME.as_bytes(), dir.path().join(BDK_DB_NAME)).unwrap();
+    store.append(&legacy_changeset).unwrap();
+    drop(store);
+
+    let database = setup_db(dir.path()).unwrap();
+    let txn = database.begin_transaction().unwrap();
+    let bdk_wallet = setup_bdk(
+        &txn,
+        dir.path(),
+        descriptors.colored.clone(),
+        descriptors.vanilla.clone(),
+        false,
+        BitcoinNetwork::Regtest,
+    )
+    .unwrap();
+    txn.commit().unwrap();
+
+    // the revealed indices survived the upgrade
+    assert_eq!(
+        bdk_wallet
+            .spk_index()
+            .last_revealed_index(KeychainKind::External),
+        donor
+            .bdk_wallet()
+            .spk_index()
+            .last_revealed_index(KeychainKind::External),
+    );
+    let txn = database.begin_transaction().unwrap();
+    let imported = txn.get_bdk_changeset().unwrap();
+    txn.commit().unwrap();
+    assert_eq!(imported.indexer.last_revealed, expected);
+
+    // the legacy store is gone, so an older rgb-lib cannot pick up the stale copy
+    assert!(!dir.path().join(BDK_DB_NAME).exists());
+}
