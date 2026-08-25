@@ -1,3 +1,4 @@
+#![allow(clippy::large_const_arrays)]
 #![allow(clippy::too_many_arguments)]
 
 use std::{
